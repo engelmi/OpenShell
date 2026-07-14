@@ -1,0 +1,51 @@
+# yaml-language-server: $schema=file:///home/mengel/projects/centos-auto/automotive-image-builder/files/manifest_schema.yml
+
+name: openshell
+
+content:
+  rpms:
+    # enable remote sessions
+    - openssh-server
+    - openssh-clients
+
+  systemd:
+    enabled_services:
+      - sshd.service
+
+qm:
+  content:
+    rpms:
+      # only for debugging
+      - vi
+      - tree
+      - strace
+      - podman
+
+    make_dirs:
+      - path: /etc/openshell/
+        parents: true
+        exist_ok: true
+ 
+    add_files:
+      - path: /etc/openshell/run.sh
+        source_path: run.sh
+      - path: /etc/openshell/policy.rego
+        source_path: openshell-policy.rego
+      - path: /etc/openshell/policy.yaml
+        source_path: openshell-policy.yaml
+    
+    container_images:
+      - source: localhost/openshell-sandbox
+        tag: latest
+        containers-transport: containers-storage
+  
+auth:
+  # "password"
+  root_password: $6$xoLqEUz0cGGJRx01$H3H/bFm0myJPULNMtbSsOFd/2BnHqHkMD92Sfxd.EKM9hXTWSmELG8cf205l6dktomuTcgKGGtGDgtvHVXSWU.
+  # allow root login for debugging
+  sshd_config:
+    PasswordAuthentication: true
+    PermitRootLogin: true
+
+image:
+  selinux_mode: permissive

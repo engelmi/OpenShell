@@ -1,0 +1,16 @@
+FROM ghcr.io/nvidia/openshell/supervisor:latest AS supervisor
+
+FROM alpine:3.22
+
+RUN apk add --no-cache iproute2 nftables curl
+
+RUN addgroup -g 1337 sandbox && adduser -D -u 1337 -G sandbox sandbox
+
+RUN mkdir -p /var/log
+RUN mkdir -p /sandbox
+RUN chown sandbox:sandbox /sandbox
+
+
+COPY --from=supervisor /openshell-sandbox /openshell-sandbox
+
+ENTRYPOINT ["/openshell-sandbox"]
