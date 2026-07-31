@@ -23,11 +23,11 @@ use openshell_core::proto::{
     GetSandboxProviderEnvironmentResponse, GetSandboxRequest, GpuResourceRequirements,
     HealthRequest, HealthResponse, ListProvidersRequest, ListProvidersResponse,
     ListSandboxProvidersRequest, ListSandboxProvidersResponse, ListSandboxesRequest,
-    ListSandboxesResponse, PlatformEvent, ProviderResponse, RevokeSshSessionRequest,
-    RevokeSshSessionResponse, Sandbox, SandboxCondition, SandboxLogLine, SandboxPhase,
-    SandboxResponse, SandboxStatus, SandboxStreamEvent, ServiceStatus, SettingValue,
-    SupervisorMessage, UpdateProviderRequest, WatchSandboxRequest, sandbox_stream_event,
-    setting_value,
+    ListSandboxesResponse, PlatformEvent, ProviderResponse, PruneSandboxesRequest,
+    PruneSandboxesResponse, RevokeSshSessionRequest, RevokeSshSessionResponse, Sandbox,
+    SandboxCondition, SandboxLogLine, SandboxPhase, SandboxResponse, SandboxStatus,
+    SandboxStreamEvent, ServiceStatus, SettingValue, SupervisorMessage, UpdateProviderRequest,
+    WatchSandboxRequest, sandbox_stream_event, setting_value,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -51,6 +51,7 @@ struct SandboxState {
     vm_log_churn_before_ready: Arc<AtomicBool>,
     global_settings: Arc<Mutex<HashMap<String, SettingValue>>>,
     gateway_config_requests: Arc<AtomicUsize>,
+    prune_response: Arc<Mutex<PruneSandboxesResponse>>,
 }
 
 #[derive(Clone, Default)]
@@ -193,6 +194,14 @@ impl OpenShell for TestOpenShell {
             .await
             .push(vec![request.name]);
         Ok(Response::new(DeleteSandboxResponse { deleted: true }))
+    }
+
+    async fn prune_sandboxes(
+        &self,
+        _: tonic::Request<PruneSandboxesRequest>,
+    ) -> Result<Response<PruneSandboxesResponse>, Status> {
+        let response = self.state.prune_response.lock().await.clone();
+        Ok(Response::new(response))
     }
 
     async fn get_sandbox_config(
@@ -1991,4 +2000,84 @@ async fn sandbox_create_yaml_stdout_is_parseable() {
     let stdout = String::from_utf8(result.stdout).expect("stdout should be UTF-8");
     serde_yml::from_str::<serde_yml::Value>(&stdout)
         .unwrap_or_else(|err| panic!("stdout should contain only YAML: {err}\n{stdout}"));
+}
+
+#[tokio::test]
+async fn sandbox_prune_reports_pruned_names() {
+    let server = run_server().await;
+    let fake_ssh_dir = tempfile::tempdir().unwrap();
+    let xdg_dir = tempfile::tempdir().unwrap();
+    let _env = test_env(&fake_ssh_dir, &xdg_dir);
+    let tls = test_tls(&server);
+
+    *server.openshell.state.prune_response.lock().await = PruneSandboxesResponse {
+        pruned_names: vec!["err-1".into(), "err-2".into()],
+        failed_names: Vec::new(),
+    };
+
+    run::sandbox_prune(&server.endpoint, "default", false, &tls, "openshell")
+        .await
+        .expect("sandbox prune should succeed");
+}
+
+#[tokio::test]
+async fn sandbox_prune_no_errors_succeeds() {
+    let server = run_server().await;
+    let fake_ssh_dir = tempfile::tempdir().unwrap();
+    let xdg_dir = tempfile::tempdir().unwrap();
+    let _env = test_env(&fake_ssh_dir, &xdg_dir);
+    let tls = test_tls(&server);
+
+    run::sandbox_prune(&server.endpoint, "default", false, &tls, "openshell")
+        .await
+        .expect("sandbox prune with no errors should succeed");
+}
+
+#[tokio::test]
+async fn sandbox_prune_reports_failures() {
+    let server = run_server().await;
+    let fake_ssh_dir = tempfile::tempdir().unwrap();
+    let xdg_dir = tempfile::tempdir().unwrap();
+    let _env = test_env(&fake_ssh_dir, &xdg_dir);
+    let tls = test_tls(&server);
+
+    *server.openshell.state.prune_response.lock().await = PruneSandboxesResponse {
+        pruned_names: vec!["ok-1".into()],
+        failed_names: vec!["stuck-1".into()],
+    };
+
+    run::sandbox_prune(&server.endpoint, "default", false, &tls, "openshell")
+        .await
+        .expect("sandbox prune should succeed even with partial failures");
+}
+
+#[tokio::test]
+async fn sandbox_prune_clears_last_sandbox_for_pruned_names() {
+    let server = run_server().await;
+    let fake_ssh_dir = tempfile::tempdir().unwrap();
+    let xdg_dir = tempfile::tempdir().unwrap();
+    let _env = test_env(&fake_ssh_dir, &xdg_dir);
+    let tls = test_tls(&server);
+
+    openshell_bootstrap::save_last_sandbox("openshell", "default", "doomed")
+        .expect("save last sandbox");
+    assert_eq!(
+        load_last_sandbox("openshell", "default").as_deref(),
+        Some("doomed"),
+    );
+
+    *server.openshell.state.prune_response.lock().await = PruneSandboxesResponse {
+        pruned_names: vec!["doomed".into()],
+        failed_names: Vec::new(),
+    };
+
+    run::sandbox_prune(&server.endpoint, "default", false, &tls, "openshell")
+        .await
+        .expect("sandbox prune should succeed");
+
+    assert_eq!(
+        load_last_sandbox("openshell", "default"),
+        None,
+        "last-sandbox cache should be cleared after pruning"
+    );
 }

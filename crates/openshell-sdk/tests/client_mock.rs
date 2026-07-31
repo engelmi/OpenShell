@@ -277,6 +277,16 @@ impl OpenShell for TestOpenShell {
         }))
     }
 
+    async fn prune_sandboxes(
+        &self,
+        _: tonic::Request<proto::PruneSandboxesRequest>,
+    ) -> Result<Response<proto::PruneSandboxesResponse>, Status> {
+        Ok(Response::new(proto::PruneSandboxesResponse {
+            failed_names: Vec::new(),
+            pruned_names: Vec::new(),
+        }))
+    }
+
     async fn create_ssh_session(
         &self,
         _: tonic::Request<proto::CreateSshSessionRequest>,

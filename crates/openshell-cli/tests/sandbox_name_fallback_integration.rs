@@ -22,8 +22,9 @@ use openshell_core::proto::{
     HealthRequest, HealthResponse, ListProvidersRequest, ListProvidersResponse,
     ListSandboxProvidersRequest, ListSandboxProvidersResponse, ListSandboxesRequest,
     ListSandboxesResponse, NetworkEndpoint, NetworkPolicyRule, PolicyStatus, ProviderResponse,
-    Sandbox, SandboxPolicy, SandboxPolicyRevision, SandboxResponse, SandboxStreamEvent,
-    ServiceStatus, SupervisorMessage, UpdateProviderRequest, WatchSandboxRequest,
+    PruneSandboxesRequest, PruneSandboxesResponse, Sandbox, SandboxPolicy, SandboxPolicyRevision,
+    SandboxResponse, SandboxStreamEvent, ServiceStatus, SupervisorMessage, UpdateProviderRequest,
+    WatchSandboxRequest,
 };
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -149,6 +150,16 @@ impl OpenShell for TestOpenShell {
         _request: tonic::Request<DeleteSandboxRequest>,
     ) -> Result<Response<DeleteSandboxResponse>, Status> {
         Ok(Response::new(DeleteSandboxResponse { deleted: true }))
+    }
+
+    async fn prune_sandboxes(
+        &self,
+        _request: tonic::Request<PruneSandboxesRequest>,
+    ) -> Result<Response<PruneSandboxesResponse>, Status> {
+        Ok(Response::new(PruneSandboxesResponse {
+            failed_names: Vec::new(),
+            pruned_names: Vec::new(),
+        }))
     }
 
     async fn get_sandbox_config(

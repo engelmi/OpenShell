@@ -245,6 +245,22 @@ impl OpenShellClient {
         sandbox_from_response(response.sandbox)
     }
 
+    /// Delete all sandboxes in the ERROR phase.
+    ///
+    /// Returns a tuple of `(pruned_names, failed_names)`.
+    pub async fn prune_sandboxes(&self) -> Result<(Vec<String>, Vec<String>)> {
+        let response = self
+            .unary(|mut grpc| {
+                let request = proto::PruneSandboxesRequest {
+                    workspace: String::new(),
+                    all_workspaces: false,
+                };
+                async move { grpc.prune_sandboxes(request).await }
+            })
+            .await?;
+        Ok((response.pruned_names, response.failed_names))
+    }
+
     /// Poll [`OpenShellClient::get_sandbox`] until the sandbox reaches
     /// [`SandboxPhase::Ready`] or the `timeout` elapses.
     ///
@@ -642,6 +658,23 @@ impl WorkspaceScopedClient {
             })
             .await?;
         sandbox_from_response(response.sandbox)
+    }
+
+    /// Delete all sandboxes in the ERROR phase in this workspace.
+    ///
+    /// Returns a tuple of `(pruned_names, failed_names)`.
+    pub async fn prune_sandboxes(&self) -> Result<(Vec<String>, Vec<String>)> {
+        let response = self
+            .client
+            .unary(|mut grpc| {
+                let request = proto::PruneSandboxesRequest {
+                    workspace: self.workspace.clone(),
+                    all_workspaces: false,
+                };
+                async move { grpc.prune_sandboxes(request).await }
+            })
+            .await?;
+        Ok((response.pruned_names, response.failed_names))
     }
 
     /// Poll until the sandbox reaches [`SandboxPhase::Ready`] or the timeout

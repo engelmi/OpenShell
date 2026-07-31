@@ -23,10 +23,10 @@ use openshell_core::proto::{
     ListSandboxProvidersRequest, ListSandboxProvidersResponse, ListSandboxesRequest,
     ListSandboxesResponse, Provider, ProviderCredentialRefresh, ProviderCredentialRefreshStatus,
     ProviderCredentialRefreshStrategy, ProviderProfile, ProviderProfileCredential,
-    ProviderProfileDiscovery, ProviderResponse, RevokeSshSessionRequest, RevokeSshSessionResponse,
-    RotateProviderCredentialRequest, RotateProviderCredentialResponse, Sandbox, SandboxResponse,
-    SandboxStreamEvent, ServiceStatus, SettingValue, SupervisorMessage, UpdateProviderRequest,
-    WatchSandboxRequest, setting_value,
+    ProviderProfileDiscovery, ProviderResponse, PruneSandboxesRequest, PruneSandboxesResponse,
+    RevokeSshSessionRequest, RevokeSshSessionResponse, RotateProviderCredentialRequest,
+    RotateProviderCredentialResponse, Sandbox, SandboxResponse, SandboxStreamEvent, ServiceStatus,
+    SettingValue, SupervisorMessage, UpdateProviderRequest, WatchSandboxRequest, setting_value,
 };
 use openshell_core::{ObjectId, ObjectName};
 use std::collections::HashMap;
@@ -293,6 +293,16 @@ impl OpenShell for TestOpenShell {
         _request: tonic::Request<DeleteSandboxRequest>,
     ) -> Result<Response<DeleteSandboxResponse>, Status> {
         Ok(Response::new(DeleteSandboxResponse { deleted: true }))
+    }
+
+    async fn prune_sandboxes(
+        &self,
+        _: tonic::Request<PruneSandboxesRequest>,
+    ) -> Result<Response<PruneSandboxesResponse>, Status> {
+        Ok(Response::new(PruneSandboxesResponse {
+            failed_names: Vec::new(),
+            pruned_names: Vec::new(),
+        }))
     }
 
     async fn get_sandbox_config(

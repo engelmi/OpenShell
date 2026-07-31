@@ -48,12 +48,13 @@ use openshell_core::proto::{
     ListSandboxPoliciesRequest, ListSandboxProvidersRequest, ListSandboxesRequest,
     ListServicesRequest, PolicySource, PolicyStatus, Provider, ProviderCredentialRefreshStatus,
     ProviderCredentialRefreshStrategy, ProviderProfile, ProviderProfileDiagnostic,
-    ProviderProfileImportItem, RejectDraftChunkRequest, ResourceRequirements,
-    RevokeSshSessionRequest, RotateProviderCredentialRequest, Sandbox, SandboxPhase, SandboxPolicy,
-    SandboxSpec, SandboxTemplate, ServiceEndpointResponse, SetInferenceRouteRequest, SettingScope,
-    StartSandboxRequest, StopSandboxRequest, TcpForwardFrame, TcpForwardInit, TcpRelayTarget,
-    UpdateConfigRequest, UpdateProviderProfilesRequest, UpdateProviderRequest, WatchSandboxRequest,
-    exec_sandbox_event, setting_value, tcp_forward_init,
+    ProviderProfileImportItem, PruneSandboxesRequest, RejectDraftChunkRequest,
+    ResourceRequirements, RevokeSshSessionRequest, RotateProviderCredentialRequest, Sandbox,
+    SandboxPhase, SandboxPolicy, SandboxSpec, SandboxTemplate, ServiceEndpointResponse,
+    SetInferenceRouteRequest, SettingScope, StartSandboxRequest, StopSandboxRequest,
+    TcpForwardFrame, TcpForwardInit, TcpRelayTarget, UpdateConfigRequest,
+    UpdateProviderProfilesRequest, UpdateProviderRequest, WatchSandboxRequest, exec_sandbox_event,
+    setting_value, tcp_forward_init,
 };
 use openshell_core::settings;
 use openshell_core::{ObjectId, ObjectName, ObjectWorkspace};
@@ -2545,6 +2546,57 @@ async fn wait_for_lifecycle_phase(
             }
         }
     }
+}
+
+/// Delete all sandboxes in the ERROR phase.
+pub async fn sandbox_prune(
+    server: &str,
+    workspace: &str,
+    all_workspaces: bool,
+    tls: &TlsOptions,
+    gateway: &str,
+) -> Result<()> {
+    let mut client = grpc_client(server, tls).await?;
+
+    let response = client
+        .prune_sandboxes(PruneSandboxesRequest {
+            workspace: workspace.to_string(),
+            all_workspaces,
+        })
+        .await
+        .into_diagnostic()?;
+
+    let inner = response.into_inner();
+
+    if inner.pruned_names.is_empty() && inner.failed_names.is_empty() {
+        println!("No sandboxes in ERROR phase to prune.");
+        return Ok(());
+    }
+
+    for name in &inner.pruned_names {
+        if let Ok(stopped) = stop_forwards_for_sandbox(name) {
+            for port in stopped {
+                eprintln!(
+                    "{} Stopped forward of port {port} for sandbox {name}",
+                    "✓".green().bold(),
+                );
+            }
+        }
+        clear_last_sandbox_if_matches(gateway, workspace, name);
+        println!("{} Pruned sandbox {name}", "✓".green().bold());
+    }
+
+    for name in &inner.failed_names {
+        println!("{} Failed to prune sandbox {name}", "✗".red().bold());
+    }
+
+    println!(
+        "\n{} pruned, {} failed",
+        inner.pruned_names.len(),
+        inner.failed_names.len()
+    );
+
+    Ok(())
 }
 
 /// Return the provider type inferred from the trailing command, if any.

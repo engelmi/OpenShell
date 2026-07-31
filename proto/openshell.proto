@@ -125,6 +125,15 @@ service OpenShell {
       workspace_role: "user"
     };
   }
+  
+  // Delete all sandboxes in the ERROR phase.
+  rpc PruneSandboxes(PruneSandboxesRequest) returns (PruneSandboxesResponse) {
+    option (openshell.options.v1.authorization) = {
+      auth_mode: "bearer"
+      scope: "sandbox:write"
+      workspace_role: "user"
+    };
+  }
 
   // Create a short-lived SSH session for a sandbox.
   rpc CreateSshSession(CreateSshSessionRequest) returns (CreateSshSessionResponse) {
@@ -1045,6 +1054,22 @@ message DetachSandboxProviderResponse {
 // Delete sandbox response.
 message DeleteSandboxResponse {
   bool deleted = 1;
+}
+
+// Prune sandboxes request — delete all sandboxes in the ERROR phase.
+message PruneSandboxesRequest {
+  // Workspace scope. Empty defaults to "default".
+  string workspace = 1;
+  // When true, prune across all workspaces (requires platform admin).
+  bool all_workspaces = 2;
+}
+
+// Prune sandboxes response.
+message PruneSandboxesResponse {
+  // Names of sandboxes that were successfully deleted.
+  repeated string pruned_names = 1;
+  // Names of sandboxes that could not be deleted.
+  repeated string failed_names = 2;
 }
 
 // Create SSH session request.

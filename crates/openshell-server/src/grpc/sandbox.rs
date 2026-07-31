@@ -22,10 +22,10 @@ use openshell_core::proto::{
     DetachSandboxProviderRequest, DetachSandboxProviderResponse, ExecSandboxEvent, ExecSandboxExit,
     ExecSandboxInput, ExecSandboxRequest, ExecSandboxStderr, ExecSandboxStdout, GetSandboxRequest,
     ListSandboxProvidersRequest, ListSandboxProvidersResponse, ListSandboxesRequest,
-    ListSandboxesResponse, Provider, RevokeSshSessionRequest, RevokeSshSessionResponse,
-    SandboxResponse, SandboxStreamEvent, SshRelayTarget, StartSandboxRequest, StopSandboxRequest,
-    TcpForwardFrame, TcpForwardInit, TcpRelayTarget, WatchSandboxRequest, relay_open,
-    tcp_forward_init,
+    ListSandboxesResponse, Provider, PruneSandboxesRequest, PruneSandboxesResponse,
+    RevokeSshSessionRequest, RevokeSshSessionResponse, SandboxResponse, SandboxStreamEvent,
+    SshRelayTarget, StartSandboxRequest, StopSandboxRequest, TcpForwardFrame, TcpForwardInit,
+    TcpRelayTarget, WatchSandboxRequest, relay_open, tcp_forward_init,
 };
 use openshell_core::proto::{Sandbox, SandboxPhase, SandboxTemplate, SshSession};
 use openshell_core::telemetry::{
@@ -849,6 +849,91 @@ async fn handle_start_sandbox_inner(
     info!(sandbox_name = %req.name, "StartSandbox request completed successfully");
     Ok(Response::new(SandboxResponse {
         sandbox: Some(sandbox),
+    }))
+}
+
+pub(super) async fn handle_prune_sandboxes(
+    state: &Arc<ServerState>,
+    request: Request<PruneSandboxesRequest>,
+) -> Result<Response<PruneSandboxesResponse>, Status> {
+    let principal = super::extract_principal(&request)?;
+    let req = request.into_inner();
+
+    if req.all_workspaces && !req.workspace.is_empty() {
+        return Err(Status::invalid_argument(
+            "all_workspaces and workspace are mutually exclusive",
+        ));
+    }
+
+    let sandboxes: Vec<Sandbox> = if req.all_workspaces {
+        require_platform_admin(&state.admin_role, &principal)?;
+        state
+            .store
+            .list_all_messages(MAX_PAGE_SIZE, 0)
+            .await
+            .map_err(|e| Status::internal(format!("list sandboxes failed: {e}")))?
+    } else {
+        let authz = authorize_workspace(
+            &state.store,
+            &state.admin_role,
+            &principal,
+            &req.workspace,
+            MinWorkspaceRole::User,
+        )
+        .await?;
+        let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
+            .await?
+            .name;
+        state
+            .store
+            .list_messages(&workspace, MAX_PAGE_SIZE, 0)
+            .await
+            .map_err(|e| Status::internal(format!("list sandboxes failed: {e}")))?
+    };
+
+    let errored: Vec<_> = sandboxes
+        .into_iter()
+        .filter(|s| SandboxPhase::try_from(s.phase()).ok() == Some(SandboxPhase::Error))
+        .collect();
+
+    let mut pruned_names = Vec::new();
+    let mut failed_names = Vec::new();
+
+    for sandbox in errored {
+        let name = sandbox.object_name().to_string();
+        let workspace = sandbox.object_workspace().to_string();
+        match state.compute.delete_sandbox(&workspace, &name).await {
+            Ok(result) => {
+                if result.deleted {
+                    state.telemetry.end_sandbox_session(&result.sandbox_id);
+                }
+                pruned_names.push(name);
+            }
+            Err(_) => {
+                failed_names.push(name);
+            }
+        }
+    }
+
+    let outcome = if failed_names.is_empty() {
+        TelemetryOutcome::Success
+    } else {
+        TelemetryOutcome::Failure
+    };
+    openshell_core::telemetry::emit_lifecycle(
+        LifecycleResource::Sandbox,
+        LifecycleOperation::Delete,
+        outcome,
+    );
+
+    info!(
+        pruned = pruned_names.len(),
+        failed = failed_names.len(),
+        "PruneSandboxes request completed"
+    );
+    Ok(Response::new(PruneSandboxesResponse {
+        pruned_names,
+        failed_names,
     }))
 }
 
@@ -4640,5 +4725,174 @@ mod tests {
             .expect("session should still exist after revocation");
         assert!(session.revoked);
         assert_eq!(session.object_workspace(), "default");
+    }
+
+    #[tokio::test]
+    async fn prune_deletes_only_error_sandboxes() {
+        let state = test_server_state().await;
+
+        let ready = test_sandbox("healthy", Vec::new());
+        state.store.put_message(&ready).await.unwrap();
+
+        let mut errored = test_sandbox("broken", Vec::new());
+        errored.set_phase(SandboxPhase::Error as i32);
+        state.store.put_message(&errored).await.unwrap();
+
+        let mut provisioning = test_sandbox("starting", Vec::new());
+        provisioning.set_phase(SandboxPhase::Provisioning as i32);
+        state.store.put_message(&provisioning).await.unwrap();
+
+        let response = handle_prune_sandboxes(
+            &state,
+            authed_request(PruneSandboxesRequest {
+                workspace: "default".to_string(),
+                all_workspaces: false,
+            }),
+        )
+        .await
+        .unwrap()
+        .into_inner();
+
+        assert_eq!(response.pruned_names, vec!["broken"]);
+        assert!(response.failed_names.is_empty());
+
+        assert!(
+            state
+                .store
+                .get_message_by_name::<Sandbox>("default", "healthy")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            state
+                .store
+                .get_message_by_name::<Sandbox>("default", "starting")
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn prune_returns_empty_when_no_errors() {
+        let state = test_server_state().await;
+
+        let ready = test_sandbox("healthy", Vec::new());
+        state.store.put_message(&ready).await.unwrap();
+
+        let response = handle_prune_sandboxes(
+            &state,
+            authed_request(PruneSandboxesRequest {
+                workspace: "default".to_string(),
+                all_workspaces: false,
+            }),
+        )
+        .await
+        .unwrap()
+        .into_inner();
+
+        assert!(response.pruned_names.is_empty());
+        assert!(response.failed_names.is_empty());
+    }
+
+    #[tokio::test]
+    async fn prune_rejects_mutually_exclusive_flags() {
+        let state = test_server_state().await;
+
+        let err = handle_prune_sandboxes(
+            &state,
+            authed_request(PruneSandboxesRequest {
+                workspace: "default".to_string(),
+                all_workspaces: true,
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn prune_all_workspaces_requires_admin() {
+        let mut state = test_server_state().await;
+        Arc::get_mut(&mut state).unwrap().admin_role = "required-platform-admin".to_string();
+
+        let err = handle_prune_sandboxes(
+            &state,
+            authed_request(PruneSandboxesRequest {
+                workspace: String::new(),
+                all_workspaces: true,
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(err.message().contains("platform admin role required"));
+    }
+
+    #[tokio::test]
+    async fn prune_multiple_error_sandboxes() {
+        let state = test_server_state().await;
+
+        for name in ["err-a", "err-b", "err-c"] {
+            let mut s = test_sandbox(name, Vec::new());
+            s.set_phase(SandboxPhase::Error as i32);
+            state.store.put_message(&s).await.unwrap();
+        }
+
+        let response = handle_prune_sandboxes(
+            &state,
+            authed_request(PruneSandboxesRequest {
+                workspace: "default".to_string(),
+                all_workspaces: false,
+            }),
+        )
+        .await
+        .unwrap()
+        .into_inner();
+
+        assert_eq!(response.pruned_names.len(), 3);
+        assert!(response.pruned_names.contains(&"err-a".to_string()));
+        assert!(response.pruned_names.contains(&"err-b".to_string()));
+        assert!(response.pruned_names.contains(&"err-c".to_string()));
+        assert!(response.failed_names.is_empty());
+    }
+
+    #[tokio::test]
+    async fn prune_skips_deleting_phase_sandboxes() {
+        let state = test_server_state().await;
+
+        let mut deleting = test_sandbox("teardown", Vec::new());
+        deleting.set_phase(SandboxPhase::Deleting as i32);
+        state.store.put_message(&deleting).await.unwrap();
+
+        let mut errored = test_sandbox("broken", Vec::new());
+        errored.set_phase(SandboxPhase::Error as i32);
+        state.store.put_message(&errored).await.unwrap();
+
+        let response = handle_prune_sandboxes(
+            &state,
+            authed_request(PruneSandboxesRequest {
+                workspace: "default".to_string(),
+                all_workspaces: false,
+            }),
+        )
+        .await
+        .unwrap()
+        .into_inner();
+
+        assert_eq!(response.pruned_names, vec!["broken"]);
+        assert!(response.failed_names.is_empty());
+
+        assert!(
+            state
+                .store
+                .get_message_by_name::<Sandbox>("default", "teardown")
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 }

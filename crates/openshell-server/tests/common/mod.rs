@@ -22,9 +22,10 @@ use openshell_core::proto::{
     GetSandboxProviderEnvironmentResponse, GetSandboxRequest, HealthRequest, HealthResponse,
     IssueSandboxTokenRequest, IssueSandboxTokenResponse, ListProvidersRequest,
     ListProvidersResponse, ListSandboxesRequest, ListSandboxesResponse, ProviderResponse,
-    RefreshSandboxTokenRequest, RefreshSandboxTokenResponse, RelayFrame, RevokeSshSessionRequest,
-    RevokeSshSessionResponse, SandboxResponse, SandboxStreamEvent, ServiceStatus,
-    SupervisorMessage, TcpForwardFrame, UpdateProviderRequest, WatchSandboxRequest,
+    PruneSandboxesRequest, PruneSandboxesResponse, RefreshSandboxTokenRequest,
+    RefreshSandboxTokenResponse, RelayFrame, RevokeSshSessionRequest, RevokeSshSessionResponse,
+    SandboxResponse, SandboxStreamEvent, ServiceStatus, SupervisorMessage, TcpForwardFrame,
+    UpdateProviderRequest, WatchSandboxRequest,
     open_shell_client::OpenShellClient,
     open_shell_server::{OpenShell, OpenShellServer},
 };
@@ -143,6 +144,16 @@ impl OpenShell for TestOpenShell {
         _request: tonic::Request<DeleteSandboxRequest>,
     ) -> Result<Response<DeleteSandboxResponse>, Status> {
         Ok(Response::new(DeleteSandboxResponse { deleted: true }))
+    }
+
+    async fn prune_sandboxes(
+        &self,
+        _request: tonic::Request<PruneSandboxesRequest>,
+    ) -> Result<Response<PruneSandboxesResponse>, Status> {
+        Ok(Response::new(PruneSandboxesResponse {
+            failed_names: Vec::new(),
+            pruned_names: Vec::new(),
+        }))
     }
 
     async fn get_sandbox_config(

@@ -1540,6 +1540,14 @@ enum SandboxCommands {
         name: Option<String>,
     },
 
+    /// Delete all sandboxes in the ERROR phase.
+    #[command(help_template = LEAF_HELP_TEMPLATE, next_help_heading = "FLAGS")]
+    Prune {
+        /// Prune sandboxes across all workspaces (overrides --workspace).
+        #[arg(long)]
+        all_workspaces: bool,
+    },
+
     /// Execute a command in a running sandbox.
     ///
     /// Runs a command inside an existing sandbox using the gRPC exec endpoint.
@@ -3186,6 +3194,16 @@ async fn run_async() -> Result<()> {
                         SandboxCommands::Start { name } => {
                             let name = resolve_sandbox_name(name, &ctx.name, &cli.workspace)?;
                             run::sandbox_start(endpoint, &name, &cli.workspace, &tls).await?;
+                        }
+                        SandboxCommands::Prune { all_workspaces } => {
+                            run::sandbox_prune(
+                                endpoint,
+                                &cli.workspace,
+                                all_workspaces,
+                                &tls,
+                                &ctx.name,
+                            )
+                            .await?;
                         }
                         SandboxCommands::Connect { name, editor } => {
                             let name = resolve_sandbox_name(name, &ctx.name, &cli.workspace)?;

@@ -134,6 +134,18 @@ impl OpenShell for TestOpenShell {
         ))
     }
 
+    async fn prune_sandboxes(
+        &self,
+        _request: tonic::Request<openshell_core::proto::PruneSandboxesRequest>,
+    ) -> Result<Response<openshell_core::proto::PruneSandboxesResponse>, Status> {
+        Ok(Response::new(
+            openshell_core::proto::PruneSandboxesResponse {
+                failed_names: Vec::new(),
+                pruned_names: Vec::new(),
+            },
+        ))
+    }
+
     async fn get_sandbox_config(
         &self,
         _request: tonic::Request<openshell_core::proto::GetSandboxConfigRequest>,
